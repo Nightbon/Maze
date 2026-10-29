@@ -1,0 +1,217 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <title>Maze</title>
+    <style>
+        body { text-align: center; background: #1e1e24; color: #fff;}
+        .controls { margin-bottom: 20px; background: #2a2a35; padding: 15px; border-radius: 8px; display: inline-block; }
+        input, button { padding: 8px 12px; margin: 5px; font-size: 14px; border-radius: 4px; border: 1px solid #444; }
+        button { color: #fff; cursor: pointer; font-weight: bold; border: none; }
+        .canvas-container { position: relative; display: inline-block; margin-top: 10px; }
+        canvas { background: #fff; border: 4px solid #333; box-shadow: 0 4px 10px rgba(0,0,0,0.5); cursor: crosshair; }
+    </style>
+</head>
+<body>
+
+    <h1>Maze</h1>
+    
+    <div class="controls">
+        <label>Строк: <input type="number" id="rows" value="20" min="1" max="50" style="width: 40px;"></label>
+        <label>Столбцов: <input type="number" id="cols" value="20" min="1" max="50" style="width: 40px;"></label>
+        <button id="genBtn" style="background: #00bcd4;">Сгенерировать</button>
+        <button id="saveBtn" style="background: #4caf50;">Сохранить файл</button>
+        <button id="loadBtn" style="background: #ff9800;">Загрузить файл</button>
+        <input type="file" id="fileInput" accept=".txt" style="display: none;">
+    </div>
+
+    <br>
+    <div class="canvas-container">
+        <canvas id="mazeCanvas" width="500" height="500"></canvas>
+    </div>
+
+    <script>
+        const canvas = document.getElementById('mazeCanvas');
+        const ctx = canvas.getContext('2d');
+
+        let mazeData = null;
+        let startPoint = null;
+        let finishPoint = null;
+        let pathData = null;
+
+        saveBtn.disabled = true;
+
+        // Генерация лабиринта
+        document.getElementById('genBtn').addEventListener('click', async () => {
+            const r = document.getElementById('rows').value;
+            const c = document.getElementById('cols').value;
+
+            try {
+                const response = await fetch(`/api/generate?rows=${r}&cols=${c}`);
+                if (!response.ok) throw new Error(await response.text());
+                mazeData = await response.json();
+                
+                startPoint = null;
+                finishPoint = null;
+                
+                render();
+                saveBtn.disabled = false;
+            } catch (err) {
+                alert(err.message);
+            }
+        });
+
+        // Отрисовка
+        function render() {
+            if (!mazeData) return;
+
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+            
+            let CELL_WIDTH = canvas.width / mazeData.cols;
+            let CELL_HEIGHT = canvas.height / mazeData.rows;
+            ctx.lineWidth = 2;
+            ctx.strokeStyle = "black";
+            for (let i = 0; i < mazeData.rows; i++) {
+                for (let j = 0; j < mazeData.cols; j++) {
+                    const xEnd = (j + 1) * CELL_WIDTH;
+                    const yEnd = (i + 1) * CELL_HEIGHT;
+                    const xStart = j * CELL_WIDTH;
+                    const yStart = i * CELL_HEIGHT;
+
+                    ctx.beginPath();
+                    if (mazeData.right_borders[i][j] === 1) {
+                        ctx.moveTo(xEnd, yStart);
+                        ctx.lineTo(xEnd, yEnd);
+                    }
+                    if (mazeData.bottom_borders[i][j] === 1) {
+                        ctx.moveTo(xStart, yEnd);
+                        ctx.lineTo(xEnd, yEnd);
+                    }
+                    ctx.stroke();
+                }
+            }
+
+            if (startPoint) {
+                ctx.fillStyle = "red";
+                ctx.fillRect(startPoint.x * CELL_WIDTH, startPoint.y * CELL_HEIGHT, CELL_WIDTH, CELL_HEIGHT);
+            }
+
+            if (finishPoint) {
+                ctx.fillStyle = "green";
+                ctx.fillRect(finishPoint.x * CELL_WIDTH, finishPoint.y * CELL_HEIGHT, CELL_WIDTH, CELL_HEIGHT);
+            }
+
+            if (pathData) {
+                ctx.strokeStyle = 'red';
+                ctx.lineWidth = 1;
+                ctx.beginPath();
+
+                ctx.moveTo(pathData[0].x * CELL_WIDTH + CELL_WIDTH/2, pathData[0].y * CELL_HEIGHT + CELL_HEIGHT/2);
+                
+                for (let i = 1; i < pathData.length; i++) {
+                    ctx.lineTo(pathData[i].x * CELL_WIDTH + CELL_WIDTH/2, pathData[i].y * CELL_HEIGHT + CELL_HEIGHT/2);
+                }
+                ctx.stroke();
+            }
+        }
+
+        // Обработка кликов canvas
+        canvas.addEventListener('click', async (event) => {
+            if (!mazeData) return;
+
+            const rect = canvas.getBoundingClientRect();
+            const clickX = event.clientX - rect.left;
+            const clickY = event.clientY - rect.top;
+
+            const x = clickX * (canvas.width / rect.width);
+            const y = clickY * (canvas.height / rect.height);
+            
+            const cellX = Math.floor(x / (canvas.width / mazeData.cols));
+            const cellY = Math.floor(y / (canvas.height / mazeData.rows));
+
+            if (!startPoint) {
+                startPoint = { x: cellX, y: cellY };
+            } else if (!finishPoint) {
+                finishPoint = { x: cellX, y: cellY };
+                render();
+                await fetchPath();
+            } else {
+                startPoint = { x: cellX, y: cellY };
+                finishPoint = null;
+                pathData = null;
+            }
+            render();
+        });
+
+        // Запрос пути
+        async function fetchPath() {
+            try {
+                const url = `/api/path?sx=${startPoint.x}&sy=${startPoint.y}&fx=${finishPoint.x}&fy=${finishPoint.y}`;
+                const response = await fetch(url);
+                if (!response.ok) throw new Error(await response.text());
+                pathData = (await response.json()).path;
+            } catch (err) {
+                alert(err.message);
+            }
+        }
+
+        // --- СОХРАНЕНИЕ ЛАБИРИНТА ---
+        document.getElementById('saveBtn').addEventListener('click', async () => {         
+            try {
+                const response = await fetch('/api/save');
+                if (!response.ok) throw new Error(await response.text());
+                const blob = await response.blob();
+
+                const url = window.URL.createObjectURL(blob);
+                const a = document.createElement('a');
+                a.href = url;
+                a.download = 'Maze.txt';
+                document.body.appendChild(a);
+                a.click();
+                document.body.removeChild(a);
+                window.URL.revokeObjectURL(url);
+            } catch (err) {
+                alert(err.message);
+            }
+        });
+
+        // --- ЗАГРУЗКА ЛАБИРИНТА ---
+        const fileInput = document.getElementById('fileInput');
+
+        document.getElementById('loadBtn').addEventListener('click', () => {
+            fileInput.click();
+        });
+
+        fileInput.addEventListener('change', async () => {
+            if (fileInput.files.length === 0) return;
+            
+            const file = fileInput.files[0];
+
+            try {
+                const response = await fetch('/api/load', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'text/plain' },
+                    body: file
+                });
+
+                if (!response.ok) throw new Error(await response.text());
+
+                mazeData = await response.json();
+                
+                startPoint = null;
+                finishPoint = null;
+                
+                document.getElementById('rows').value = mazeData.rows;
+                document.getElementById('cols').value = mazeData.cols;
+                
+                render(); 
+                saveBtn.disabled = false;
+            } catch (err) {
+                alert(err.message);
+            } finally {
+                fileInput.value = ""; 
+            }
+        });
+    </script>
+</body>
+</html>
